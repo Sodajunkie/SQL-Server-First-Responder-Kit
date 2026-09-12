@@ -1,0 +1,66 @@
+name: SQL Server smoke tests
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+
+concurrency:
+  group: sql-server-smoke-tests-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  smoke-tests:
+    # Oldest supported and newest available. SQL Server 2016 left extended
+    # support on 2026-07-14, which makes 2017 the oldest version worth testing;
+    # 2025 is the current release. Both run to completion even if one fails, so
+    # a version-specific break is obvious.
+    name: ${{ matrix.label }}
+    runs-on: ubuntu-22.04
+    timeout-minutes: 30
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - image: mcr.microsoft.com/mssql/server:2017-latest
+            label: SQL Server 2017 (oldest supported)
+          - image: mcr.microsoft.com/mssql/server:2025-latest
+            label: SQL Server 2025 (newest)
+
+    env:
+      SQLCMDSERVER: tcp:127.0.0.1,1433
+      SQLCMDUSER: sa
+      SQLCMDPASSWORD: Testing-Only-Passw0rd!
+      MSSQL_IMAGE: ${{ matrix.image }}
+
+    services:
+      sqlserver:
+        image: ${{ matrix.image }}
+        env:
+          ACCEPT_EULA: Y
+          MSSQL_PID: Developer
+          # 2017 images read SA_PASSWORD; later images read MSSQL_SA_PASSWORD.
+          # Setting both keeps one service definition working across the matrix.
+          SA_PASSWORD: Testing-Only-Passw0rd!
+          MSSQL_SA_PASSWORD: Testing-Only-Passw0rd!
+        ports:
+          - 1433:1433
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v5
+
+      - name: Install sqlcmd
+        run: |
+          curl -sSL -O https://packages.microsoft.com/config/ubuntu/22.04/packages-microsoft-prod.deb
+          sudo dpkg -i packages-microsoft-prod.deb
+          sudo apt-get update
+          sudo env ACCEPT_EULA=Y apt-get install -y mssql-tools18 unixodbc-dev
+          echo "/opt/mssql-tools18/bin" >> "$GITHUB_PATH"
+
+      # The runner installs pinned Ola dependencies for real restore coverage.
+      - name: Run SQL Server smoke tests
+        run: bash .github/scripts/run-sql-server-smoke-tests.sh

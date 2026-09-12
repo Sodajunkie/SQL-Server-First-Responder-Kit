@@ -332,6 +332,10 @@ IF @StoredProcName IS NOT NULL
 BEGIN
     /* RAISERROR can't take function calls as args; capture DB_NAME() into a variable. */
     DECLARE @CurrentDbName SYSNAME = DB_NAME();
+    DECLARE @StoredProcDatabaseName SYSNAME = PARSENAME(@StoredProcName, 3);
+
+    IF @DatabaseName IS NULL AND @StoredProcDatabaseName IS NOT NULL
+        SET @DatabaseName = @StoredProcDatabaseName;
 
     /* Azure SQL DB can't do cross-DB OBJECT_ID lookups. Reject mismatches early. */
     IF @EngineEdition IN (5, 8)
@@ -1553,14 +1557,16 @@ BEGIN
        a period, space, or other special character still produce a valid identifier
        and the dynamic SQL can't be tampered with via a maliciously-named linked server. */
     DECLARE @LinkedServerSafe SYSNAME = REPLACE(REPLACE(@LinkedServer, N'[', N''), N']', N'');
-    SET @sql = N'EXEC ' + QUOTENAME(@LinkedServerSafe) + N'.master.dbo.sp_BlitzPlanCompare @QueryPlanHash = @hash;';
+    SET @sql = N'EXEC ' + QUOTENAME(@LinkedServerSafe) + N'.master.dbo.sp_BlitzPlanCompare @QueryPlanHash = @hash'
+             + CASE WHEN @DatabaseName IS NOT NULL THEN N', @DatabaseName = @dbname' ELSE N'' END
+             + N';';
 
     IF @Debug = 1
         RAISERROR('Linked-server invocation: %s (passing local QueryHash so remote can resolve its own plan with a matching query_hash)', 0, 1, @sql) WITH NOWAIT;
 
     BEGIN TRY
         INSERT INTO #RemoteEmit ([CallStack])
-        EXEC sp_executesql @sql, N'@hash BINARY(8)', @hash = @QueryHashBin;
+        EXEC sp_executesql @sql, N'@hash BINARY(8), @dbname SYSNAME', @hash = @QueryHashBin, @dbname = @DatabaseName;
 
         /* The remote returned a single string of the form:
                EXEC dbo.sp_BlitzPlanCompare @CompareToXML = N'<BlitzPlanCompareSnapshot ...>';

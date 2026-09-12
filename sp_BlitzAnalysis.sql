@@ -38,7 +38,7 @@ BEGIN
 SET NOCOUNT ON;
 SET STATISTICS XML OFF;
 
-SELECT @Version = '8.32', @VersionDate = '20260407';
+SELECT @Version = '8.34', @VersionDate = '20260702';
 
 IF(@VersionCheckMode = 1)
 BEGIN
@@ -91,6 +91,12 @@ IF (DB_ID(@OutputDatabaseName) IS NULL)
 BEGIN
 	RAISERROR('Invalid database name provided for parameter @OutputDatabaseName: %s',11,0,@OutputDatabaseName);
 	RETURN;
+END
+
+/* Default to dbo schema if NULL is passed in */
+IF (@OutputSchemaName IS NULL)
+BEGIN
+	SET @OutputSchemaName = 'dbo';
 END
 
 /* Set fully qualified table names */
@@ -183,12 +189,6 @@ BEGIN
 		SET @EndDate = SYSDATETIMEOFFSET();
 	END
 END 
-
-/* Default to dbo schema if NULL is passed in */
-IF (@OutputSchemaName IS NULL) 
-BEGIN 
-	SET @OutputSchemaName = 'dbo';
-END
 
 /* Prompt the user for @BringThePain = 1 if they are searching a timeframe greater than 4 hours and they are using BlitzCacheSortorder = 'all' */
 IF(@BlitzCacheSortorder = 'all' AND DATEDIFF(HOUR,@StartDate,@EndDate) > 4 AND @BringThePain = 0)
@@ -375,7 +375,7 @@ CASE
 	WHEN MAX([io_stall_write_ms_average]) > @WriteLatencyThreshold THEN ''Yes''
 	ELSE ''No'' 
 END AS [io_stall_ms_breached],
-LEFT([PhysicalName],LEN([PhysicalName])-CHARINDEX(''\'',REVERSE([PhysicalName]))+1) AS [PhysicalPath],
+LEFT([PhysicalName],LEN([PhysicalName])-PATINDEX(''%[\/]%'',REVERSE([PhysicalName]))+1) AS [PhysicalPath],
 SUM([SizeOnDiskMB]) AS [SizeOnDiskMB], 
 SUM([SizeOnDiskMBgrowth]) AS [SizeOnDiskMBgrowth], 
 MAX([io_stall_read_ms]) AS [max_io_stall_read_ms], 
@@ -400,7 +400,7 @@ END
 +N'GROUP BY 
 [ServerName], 
 [CheckDate],
-LEFT([PhysicalName],LEN([PhysicalName])-CHARINDEX(''\'',REVERSE([PhysicalName]))+1)
+LEFT([PhysicalName],LEN([PhysicalName])-PATINDEX(''%[\/]%'',REVERSE([PhysicalName]))+1)
 ORDER BY 
 [CheckDate] ASC
 OPTION (RECOMPILE, MAXDOP '+CAST(@Maxdop AS NVARCHAR(2))+N');'

@@ -37,12 +37,17 @@ function Invoke-SqlCmd-String {
 
     $prevPref = $ErrorActionPreference
     $ErrorActionPreference = "Continue"
-    $output = & sqlcmd -S $ServerInstance -E -d $Database -C -i $tmpFile -b 2>&1
+    $output = & sqlcmd -S $ServerInstance -E -d $Database -C -i $tmpFile -b -r 1 2>&1
     $exitCode = $LASTEXITCODE
     $ErrorActionPreference = $prevPref
     Remove-Item $tmpFile -ErrorAction SilentlyContinue
 
-    return @{ Output = ($output -join "`n"); ExitCode = $exitCode; Label = $Label }
+    return @{
+        Output = ($output -join "`n")
+        ExitCode = $exitCode
+        Label = $Label
+        Command = "sqlcmd -S `"$ServerInstance`" -E -d `"$Database`" -C -i `"$tmpFile`" -b -r 1"
+    }
 }
 
 # ── Helper: run a .sql file via sqlcmd, return output ────────────────────────
@@ -51,11 +56,67 @@ function Invoke-SqlCmd-File {
 
     $prevPref = $ErrorActionPreference
     $ErrorActionPreference = "Continue"
-    $output = & sqlcmd -S $ServerInstance -E -d $Database -C -i $FilePath -b 2>&1
+    $output = & sqlcmd -S $ServerInstance -E -d $Database -C -i $FilePath -b -r 1 2>&1
     $exitCode = $LASTEXITCODE
     $ErrorActionPreference = $prevPref
 
-    return @{ Output = ($output -join "`n"); ExitCode = $exitCode; Label = $Label }
+    return @{
+        Output = ($output -join "`n")
+        ExitCode = $exitCode
+        Label = $Label
+        FilePath = $FilePath
+        Command = "sqlcmd -S `"$ServerInstance`" -E -d `"$Database`" -C -i `"$FilePath`" -b -r 1"
+    }
+}
+
+# ── Helper: pull out the most useful sqlcmd error lines ──────────────────────
+function Get-SqlCmdErrorSummary {
+    param([string]$Output)
+
+    if ([string]::IsNullOrWhiteSpace($Output)) {
+        return "(sqlcmd did not return any output.)"
+    }
+
+    $lines = $Output -split "`r?`n"
+    $errorLines = $lines | Where-Object {
+        $_ -match "^(Msg\s+\d+|Sqlcmd:\s+Error:|Sqlcmd:\s+Warning:)" -or
+        $_ -match "\b(Level|State|Line)\b" -or
+        $_ -match "(Incorrect syntax|Invalid object|Cannot|Could not|failed|error)"
+    } | Select-Object -First 20
+
+    if ($errorLines.Count -eq 0) {
+        $errorLines = $lines | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Select-Object -Last 20
+    }
+
+    return ($errorLines -join "`n")
+}
+
+# ── Helper: write actionable failure details to console and log ──────────────
+function Report-SqlCmdFailure {
+    param([hashtable]$Result, [string]$ExtraContext = "")
+
+    $details = @"
+Command:
+$($Result.Command)
+
+Exit code: $($Result.ExitCode)
+$ExtraContext
+Output:
+$($Result.Output)
+"@
+
+    Log-Error -Label $Result.Label -Details $details
+
+    Write-Host "  sqlcmd exit code: $($Result.ExitCode)" -ForegroundColor Red
+    if ($Result.FilePath) {
+        Write-Host "  SQL file: $($Result.FilePath)" -ForegroundColor Yellow
+    }
+    Write-Host "  Target: $ServerInstance / $Database" -ForegroundColor Yellow
+    Write-Host "  Most relevant output:" -ForegroundColor Yellow
+    foreach ($line in (Get-SqlCmdErrorSummary -Output $Result.Output) -split "`n") {
+        Write-Host "    $line" -ForegroundColor DarkYellow
+    }
+    Write-Host "  Full command, exit code, and output were written to: $ErrorLog" -ForegroundColor Yellow
 }
 
 # ── Helper: log an error ─────────────────────────────────────────────────────
@@ -98,26 +159,9 @@ Write-Host "  Current: v$currentVersion ($currentDate)"
 Write-Host "  New:     v$newVersion ($Today)"
 
 # ══════════════════════════════════════════════════════════════════════════════
-# STEP 2 — Create release branch
+# STEP 2 — Update version numbers and dates in all sp_*.sql files
 # ══════════════════════════════════════════════════════════════════════════════
-Write-Host "`n=== Step 2: Create branch $BranchName ===" -ForegroundColor Cyan
-
-Push-Location $RepoRoot
-try {
-    $ErrorActionPreference = "Continue"
-    $null = git checkout dev 2>&1
-    $null = git checkout -b $BranchName 2>&1
-    $ErrorActionPreference = "Stop"
-    if ($LASTEXITCODE -ne 0) { throw "Failed to create branch $BranchName" }
-    Write-Host "  Branch created: $BranchName"
-} finally {
-    Pop-Location
-}
-
-# ══════════════════════════════════════════════════════════════════════════════
-# STEP 3 — Update version numbers and dates in all sp_*.sql files
-# ══════════════════════════════════════════════════════════════════════════════
-Write-Host "`n=== Step 3: Update version numbers ===" -ForegroundColor Cyan
+Write-Host "`n=== Step 2: Update version numbers ===" -ForegroundColor Cyan
 
 $spFiles = Get-ChildItem -Path $RepoRoot -Filter "sp_*.sql"
 foreach ($file in $spFiles) {
@@ -128,9 +172,9 @@ foreach ($file in $spFiles) {
 }
 
 # ══════════════════════════════════════════════════════════════════════════════
-# STEP 4 — Build installation scripts
+# STEP 3 — Build installation scripts
 # ══════════════════════════════════════════════════════════════════════════════
-Write-Host "`n=== Step 4: Build Install-*.sql ===" -ForegroundColor Cyan
+Write-Host "`n=== Step 3: Build Install-*.sql ===" -ForegroundColor Cyan
 
 $SqlVersionsPath  = Join-Path $RepoRoot "SqlServerVersions.sql"
 $BlitzFirstPath   = Join-Path $RepoRoot "sp_BlitzFirst.sql"
@@ -186,22 +230,28 @@ if (Test-Path $BlitzFirstPath) {
 Write-Host "  Built: Install-All-Scripts.sql"
 
 # ══════════════════════════════════════════════════════════════════════════════
-# STEP 5 — Install procs on local SQL Server
+# STEP 4 — Install procs on local SQL Server
 # ══════════════════════════════════════════════════════════════════════════════
-Write-Host "`n=== Step 5: Install procs via Install-All-Scripts.sql ===" -ForegroundColor Cyan
+Write-Host "`n=== Step 4: Install procs via Install-All-Scripts.sql ===" -ForegroundColor Cyan
 
 $installResult = Invoke-SqlCmd-File -FilePath $InstallAllPath -Label "Install-All-Scripts.sql"
 if ($installResult.ExitCode -ne 0) {
-    Log-Error -Label $installResult.Label -Details $installResult.Output
+    $installContext = @"
+
+Install script path: $InstallAllPath
+Install script size: $((Get-Item $InstallAllPath).Length) bytes
+Working directory: $(Get-Location)
+"@
+    Report-SqlCmdFailure -Result $installResult -ExtraContext $installContext
     Write-Host "`n  Installation failed. See $ErrorLog for details." -ForegroundColor Red
     Write-Host "  Skipping test calls." -ForegroundColor Yellow
 } else {
     Write-Host "  Installation succeeded."
 
     # ══════════════════════════════════════════════════════════════════════════
-    # STEP 6 — Run test calls
+    # STEP 5 — Run test calls
     # ══════════════════════════════════════════════════════════════════════════
-    Write-Host "`n=== Step 6: Run test calls ===" -ForegroundColor Cyan
+    Write-Host "`n=== Step 5: Run test calls ===" -ForegroundColor Cyan
 
     $testCalls = @(
         @{
@@ -327,7 +377,7 @@ EXEC dbo.sp_BlitzFirst @OutputDatabaseName = 'DBAtools',
         Write-Host "  [$testNumber/$($testCalls.Count)] $($test.Label)..." -NoNewline
         $result = Invoke-SqlCmd-String -Sql $test.Sql -Label $test.Label
         if ($result.ExitCode -ne 0) {
-            Log-Error -Label $test.Label -Details $result.Output
+            Report-SqlCmdFailure -Result $result
         } else {
             Write-Host "  OK" -ForegroundColor Green
         }
@@ -335,9 +385,9 @@ EXEC dbo.sp_BlitzFirst @OutputDatabaseName = 'DBAtools',
 }
 
 # ══════════════════════════════════════════════════════════════════════════════
-# STEP 7 — Report results
+# STEP 6 — Report results
 # ══════════════════════════════════════════════════════════════════════════════
-Write-Host "`n=== Step 7: Results ===" -ForegroundColor Cyan
+Write-Host "`n=== Step 6: Results ===" -ForegroundColor Cyan
 
 if ($script:HasErrors) {
     Write-Host "`n  Errors were found. See log: $ErrorLog" -ForegroundColor Red
@@ -345,10 +395,21 @@ if ($script:HasErrors) {
 } else {
     Write-Host "  All tests passed!" -ForegroundColor Green
 
-    # Stage and commit changes
+    # Create the release branch only after the generated scripts have passed
+    # installation and test calls. This keeps repeated troubleshooting runs
+    # from failing early on an already-existing branch.
+    Write-Host "`n=== Step 7: Create branch $BranchName ===" -ForegroundColor Cyan
+
     Push-Location $RepoRoot
     try {
         $ErrorActionPreference = "Continue"
+        $null = git checkout -b $BranchName 2>&1
+        if ($LASTEXITCODE -ne 0) {
+            throw "Failed to create branch $BranchName. Confirm you are on the intended base branch and that this branch name does not already exist."
+        }
+        Write-Host "  Branch created: $BranchName"
+
+        # Stage and commit changes
         $null = git add -A 2>&1
         $null = git commit -m "$Today release prep" 2>&1
         $null = git push -u origin $BranchName 2>&1

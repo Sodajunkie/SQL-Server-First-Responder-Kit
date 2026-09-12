@@ -72,7 +72,7 @@ BEGIN
 	SOFTWARE.
 	*/
 
-	SELECT @Version = '8.32', @VersionDate = '20260407';
+	SELECT @Version = '8.34', @VersionDate = '20260702';
 
 	IF(@VersionCheckMode = 1)
 	BEGIN
@@ -144,7 +144,7 @@ Parameters:
     NULL = normal operation (default). Pass 1 or 2 to enable emergency mode; 0 is not accepted.
     1 = Skip nearly all optional parts of the processing to minimize work performed by the procedure, but show the sql_text column.
     2 = Skip all optional parts of processing including the sql_text column.
-    Note: in emergency mode, @OrderBy = 'tempdb' is not meaningful because tempdb_allocations_mb is not collected.
+    Note: in emergency mode, @OrderBy = ''tempdb'' is not meaningful because tempdb_allocations_mb is not collected.
 
 Example usage:
   -- Just show recommendations, no killing:
@@ -691,13 +691,13 @@ For more info, visit http://FirstResponderKit.org
 		/* Create table if it doesn't exist */
 		IF @AzureSQLDB = 1
 			SET @StringToExecute = N'
-				IF EXISTS(SELECT * FROM INFORMATION_SCHEMA.SCHEMATA WHERE QUOTENAME(SCHEMA_NAME) = ''' + @OutputSchemaName + N''')
-				AND NOT EXISTS (SELECT * FROM INFORMATION_SCHEMA.TABLES WHERE QUOTENAME(TABLE_SCHEMA) = ''' + @OutputSchemaName + N''' AND QUOTENAME(TABLE_NAME) = ''' + @OutputTableName + N''')
+				IF EXISTS(SELECT * FROM INFORMATION_SCHEMA.SCHEMATA WHERE QUOTENAME(SCHEMA_NAME) = N''' + REPLACE(@OutputSchemaName, N'''', N'''''') + N''')
+				AND NOT EXISTS (SELECT * FROM INFORMATION_SCHEMA.TABLES WHERE QUOTENAME(TABLE_SCHEMA) = N''' + REPLACE(@OutputSchemaName, N'''', N'''''') + N''' AND QUOTENAME(TABLE_NAME) = N''' + REPLACE(@OutputTableName, N'''', N'''''') + N''')
 				CREATE TABLE ' + @ObjectFullName + N' (';
 		ELSE
 			SET @StringToExecute = N'
-				IF EXISTS(SELECT * FROM ' + @OutputDatabaseName + N'.INFORMATION_SCHEMA.SCHEMATA WHERE QUOTENAME(SCHEMA_NAME) = ''' + @OutputSchemaName + N''')
-				AND NOT EXISTS (SELECT * FROM ' + @OutputDatabaseName + N'.INFORMATION_SCHEMA.TABLES WHERE QUOTENAME(TABLE_SCHEMA) = ''' + @OutputSchemaName + N''' AND QUOTENAME(TABLE_NAME) = ''' + @OutputTableName + N''')
+				IF EXISTS(SELECT * FROM ' + @OutputDatabaseName + N'.INFORMATION_SCHEMA.SCHEMATA WHERE QUOTENAME(SCHEMA_NAME) = N''' + REPLACE(@OutputSchemaName, N'''', N'''''') + N''')
+				AND NOT EXISTS (SELECT * FROM ' + @OutputDatabaseName + N'.INFORMATION_SCHEMA.TABLES WHERE QUOTENAME(TABLE_SCHEMA) = N''' + REPLACE(@OutputSchemaName, N'''', N'''''') + N''' AND QUOTENAME(TABLE_NAME) = N''' + REPLACE(@OutputTableName, N'''', N'''''') + N''')
 				CREATE TABLE ' + @ObjectFullName + N' (';
 
 		SET @StringToExecute = @StringToExecute + N'
